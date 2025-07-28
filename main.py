@@ -1,38 +1,24 @@
-# ─── 0. Install Dependencies ─────────────────────────────────────────────────
-import subprocess
-import sys
 
-def install_dependencies():
-    try:
-        import pillow_heif
-    except ImportError:
-        subprocess.run(["apt-get", "install", "-y", "libheif-examples", "libde265-0"])
-        subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                        "pillow-heif", "openai", "gspread", "gspread_dataframe", "pandas", 
-                        "pillow", "requests", "google-auth", "google-auth-oauthlib", 
-                        "google-api-python-client", "pytz"])
-        import importlib
-        importlib.reload(sys.modules[__name__])  # restart if needed
-
-install_dependencies()
-
-# ─── 1. Imports ──────────────────────────────────────────────────────────────
+# ─── 1. Install and import tools ─────────────────────────────────────────────
 import os, io, json, base64, requests
 from datetime import datetime
+from pathlib import Path
 from io import BytesIO
+
 import pandas as pd
 import openai
 import pytz
 import pillow_heif
 from PIL import Image, UnidentifiedImageError
 from pdf2image import convert_from_bytes
+
 import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
-# Enable HEIC support
+# Enable HEIF support
 pillow_heif.register_heif_opener()
 
 # ─── 2. Authenticate Google Drive / Sheets ───────────────────────────────────
@@ -51,23 +37,23 @@ creds = service_account.Credentials.from_service_account_file(
 gc = gspread.authorize(creds)
 drive_service = build("drive", "v3", credentials=creds)
 
-# ─── 3. Load Spreadsheet ─────────────────────────────────────────────────────
+# ─── 3. Load Sheet and Detect Image Column ───────────────────────────────────
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1-kQUNeRJ4Pz2VY83oHSHXw1aOwJ85UySGzX_JvQqxds/edit?gid=753113799#gid=753113799"
 sh = gc.open_by_url(SHEET_URL)
 worksheet = sh.get_worksheet(0)
 
+# Load DataFrame and drop empty photo rows
 df = get_as_dataframe(worksheet).dropna(subset=["Photo"]).reset_index(drop=True)
 
 # ─── 4. Fetch Image Bytes ────────────────────────────────────────────────────
 def fetch_image_bytes(path_or_url):
     try:
-        # Local image path (e.g., from mounted drive)
+        # Skip local drive paths (not supported outside Colab)
         if path_or_url.startswith("/content/drive/"):
-            img = Image.open(path_or_url).convert("RGB")
-            buf = BytesIO(); img.save(buf, format="JPEG")
-            return buf.getvalue()
+            print("Local Colab drive path not supported in GitHub Actions.")
+            return None
 
-        # Google Drive share link
+        # Handle Google Drive share URLs
         if "open?id=" in path_or_url:
             file_id = path_or_url.split("open?id=")[-1]
         elif "/file/d/" in path_or_url:
@@ -75,6 +61,7 @@ def fetch_image_bytes(path_or_url):
         else:
             raise ValueError("Unrecognized Photo entry")
 
+        # Download image from Google Drive
         request = drive_service.files().get_media(fileId=file_id)
         fh = BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
@@ -83,19 +70,20 @@ def fetch_image_bytes(path_or_url):
             _, done = downloader.next_chunk()
         fh.seek(0)
 
+        # Open image in RGB format (now supports HEIC too)
         img = Image.open(fh).convert("RGB")
         buf = BytesIO(); img.save(buf, format="JPEG")
         return buf.getvalue()
 
     except Exception as e:
-        print(f"❌ Error loading image: {e}")
+        print(f"Error loading image: {e}")
         return None
 
-# ─── 5. Base64 Helper ────────────────────────────────────────────────────────
+# Helper function to base64-encode image bytes
 def encode_image_bytes(img_bytes):
     return base64.b64encode(img_bytes).decode("utf-8")
 
-# ─── 6. GPT Nail Assessment ──────────────────────────────────────────────────
+# ─── 5. GPT Assessment ───────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def get_nail_assessment(b64_img):
@@ -145,21 +133,25 @@ def get_nail_assessment(b64_img):
     json_str = raw[start:end+1]
     return json.loads(json_str)
 
-# ─── 7. Process New Rows Only ────────────────────────────────────────────────
+# ─── 6. Process New Rows Only ────────────────────────────────────────────────
 results = []
 timestamp_col = "Timestamp Rating"
 
+# Ensure Timestamp Rating column exists
 if timestamp_col not in df.columns:
     df[timestamp_col] = ""
 
+# Get current Boston (EDT) time
 boston_now = lambda: datetime.now(pytz.timezone('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
 
 for idx, row in df.iterrows():
+    # Skip already rated rows
     if pd.notnull(row.get(timestamp_col)) and str(row[timestamp_col]).strip() != "":
         print(f"Skipping row {idx} — already rated.")
         results.append(None)
         continue
 
+    # Load and process image
     img_bytes = fetch_image_bytes(row["Photo"])
     if not img_bytes:
         print(f"Skipping row {idx}: could not load image.")
@@ -174,6 +166,7 @@ for idx, row in df.iterrows():
         })
         continue
 
+    # Assess via GPT
     try:
         assessment = get_nail_assessment(encode_image_bytes(img_bytes))
         assessment[timestamp_col] = boston_now()
@@ -191,7 +184,7 @@ for idx, row in df.iterrows():
             timestamp_col:        boston_now()
         })
 
-# ─── 8. Write Results Back to Sheet ─────────────────────────────────────────
+# ─── 7. Write Results to Google Sheet ────────────────────────────────────────
 for i, res in enumerate(results):
     if res is None:
         continue
