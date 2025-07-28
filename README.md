@@ -121,7 +121,3 @@ Test results: [Google Sheet](https://shorturl.at/KCIaI)
 * Google Sheet: [Live Data](https://shorturl.at/Aik5Z)
 * Code Repository: [GitHub](https://github.com/duocroidithoy/Miniluxe_AI_nail_rate/blob/main/main.py)
 * Test Results: [Analysis Sheet](https://shorturl.at/KCIaI)
-
----
-
-Let me know if you'd like this saved as a file or automatically added to your GitHub repo.
