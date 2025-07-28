@@ -1,7 +1,3 @@
-Here is the GitHub `README.md` summary with all icons removed:
-
----
-
 # AI-Assisted Recruitment for Miniluxe Nail Technicians
 
 A cost-effective system using GPT-4o to pre-screen nail technician applicants through automated photo assessment.
