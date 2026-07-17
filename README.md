@@ -16,7 +16,7 @@ Miniluxe's traditional recruitment process takes approximately 42 minutes per ap
 
 ## Solution: AI-Assisted Skill Assessment
 
-Use GPT-4o to evaluate applicant-submitted nail work before interviews.
+Use GPT-4o and Google Form to evaluate applicant-submitted nail work before interviews.
 
 ### Benefits
 
